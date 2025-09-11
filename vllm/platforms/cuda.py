@@ -7,20 +7,20 @@ pynvml. However, it should not initialize cuda context.
 import os
 from datetime import timedelta
 from functools import cache, wraps
-from typing import TYPE_CHECKING, Callable, Optional, TypeVar, Union
+from typing import Callable, Optional, TYPE_CHECKING, TypeVar, Union
 
 import torch
-from torch.distributed import PrefixStore, ProcessGroup
-from torch.distributed.distributed_c10d import is_nccl_available
-from typing_extensions import ParamSpec
 
 # import custom ops, trigger op registration
 import vllm._C  # noqa
 import vllm.envs as envs
+from torch.distributed import PrefixStore, ProcessGroup
+from torch.distributed.distributed_c10d import is_nccl_available
+from typing_extensions import ParamSpec
 from vllm.logger import init_logger
 from vllm.utils import cuda_device_count_stateless, import_pynvml
 
-from .interface import DeviceCapability, Platform, PlatformEnum, _Backend
+from .interface import _Backend, DeviceCapability, Platform, PlatformEnum
 
 if TYPE_CHECKING:
     from vllm.config import ModelConfig, VllmConfig
@@ -64,8 +64,7 @@ class CudaPlatformBase(Platform):
         if self.has_device_capability(80):
             # Ampere and Hopper or later NVIDIA GPUs.
             return [torch.bfloat16, torch.float16, torch.float32]
-        elif (not self.has_device_capability(80)
-              ) and self.has_device_capability(60):
+        elif (not self.has_device_capability(80)) and self.has_device_capability(60):
             # Pascal, Volta and Turing NVIDIA GPUs, BF16 is not supported
             return [torch.float16, torch.float32]
         # Kepler and Maxwell NVIDIA GPUs, only FP32 is supported,
@@ -84,9 +83,7 @@ class CudaPlatformBase(Platform):
         _ = torch.zeros(1, device=device)
 
     @classmethod
-    def get_device_capability(cls,
-                              device_id: int = 0
-                              ) -> Optional[DeviceCapability]:
+    def get_device_capability(cls, device_id: int = 0) -> Optional[DeviceCapability]:
         raise NotImplementedError
 
     @classmethod
@@ -103,7 +100,8 @@ class CudaPlatformBase(Platform):
             logger.warning(
                 "To see benefits of async output processing, enable CUDA "
                 "graph. Since, enforce-eager is enabled, async output "
-                "processor cannot be used")
+                "processor cannot be used"
+            )
             return False
         return True
 
@@ -124,12 +122,12 @@ class CudaPlatformBase(Platform):
             if vllm_config.speculative_config:
                 if not envs.VLLM_USE_V1:
                     raise NotImplementedError(
-                        "Speculative decoding is not supported on vLLM V0.")
+                        "Speculative decoding is not supported on vLLM V0."
+                    )
                 parallel_config.worker_cls = "vllm.v1.worker.gpu_worker.Worker"
             else:
                 if envs.VLLM_USE_V1:
-                    parallel_config.worker_cls = \
-                        "vllm.v1.worker.gpu_worker.Worker"
+                    parallel_config.worker_cls = "vllm.v1.worker.gpu_worker.Worker"
                 else:
                     parallel_config.worker_cls = "vllm.worker.worker.Worker"
 
@@ -161,41 +159,47 @@ class CudaPlatformBase(Platform):
                     use_flashmla = True
             else:
                 # Forced case
-                use_flashmla = (envs.VLLM_ATTENTION_BACKEND == "FLASHMLA")
-                use_cutlass_mla = (
-                    envs.VLLM_ATTENTION_BACKEND == "CUTLASS_MLA")
+                use_flashmla = envs.VLLM_ATTENTION_BACKEND == "FLASHMLA"
+                use_cutlass_mla = envs.VLLM_ATTENTION_BACKEND == "CUTLASS_MLA"
 
             from vllm.attention.ops.flashmla import is_flashmla_supported
-            if use_flashmla and is_flashmla_supported()[0] \
-                and cache_config.block_size != 64:
+
+            if (
+                use_flashmla
+                and is_flashmla_supported()[0]
+                and cache_config.block_size != 64
+            ):
                 cache_config.block_size = 64
-                logger.info(
-                    "Forcing kv cache block size to 64 for FlashMLA backend.")
+                logger.info("Forcing kv cache block size to 64 for FlashMLA backend.")
 
             if use_cutlass_mla and cache_config.block_size != 128:
                 cache_config.block_size = 128
-                logger.info("Forcing kv cache block size to 128 for "
-                            "CUTLASS_MLA backend.")
+                logger.info(
+                    "Forcing kv cache block size to 128 for " "CUTLASS_MLA backend."
+                )
 
         # lazy import to avoid circular import
         from vllm.config import CUDAGraphMode
 
         compilation_config = vllm_config.compilation_config
-        if (envs.VLLM_ALL2ALL_BACKEND == "deepep_high_throughput"
-                and parallel_config.data_parallel_size > 1
-                and compilation_config.cudagraph_mode
-                not in [CUDAGraphMode.NONE, CUDAGraphMode.PIECEWISE]):
+        if (
+            envs.VLLM_ALL2ALL_BACKEND == "deepep_high_throughput"
+            and parallel_config.data_parallel_size > 1
+            and compilation_config.cudagraph_mode
+            not in [CUDAGraphMode.NONE, CUDAGraphMode.PIECEWISE]
+        ):
             logger.info(
                 "Data Parallel with DeepEP high-throughput: using PIECEWISE "
                 "CUDA graphs and excluding MoE ops from capture. Set "
                 "VLLM_ALL2ALL_BACKEND=deepep_low_latency if you need MoE "
-                "graphs captured as well.")
+                "graphs captured as well."
+            )
             compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
 
     @classmethod
-    def get_current_memory_usage(cls,
-                                 device: Optional[torch.types.Device] = None
-                                 ) -> float:
+    def get_current_memory_usage(
+        cls, device: Optional[torch.types.Device] = None
+    ) -> float:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
         return torch.cuda.max_memory_allocated(device)
@@ -204,20 +208,30 @@ class CudaPlatformBase(Platform):
     def get_vit_attn_backend(cls, support_fa: bool = False) -> _Backend:
         if cls.has_device_capability(80) and support_fa:
             from transformers.utils import is_flash_attn_2_available
+
             if is_flash_attn_2_available():
                 return _Backend.FLASH_ATTN
             logger.warning_once(
                 "Current `vllm-flash-attn` has a bug inside vision "
                 "module, so we use xformers backend instead. You can "
                 "run `pip install flash-attn` to use flash-attention "
-                "backend.")
+                "backend."
+            )
         # Fallback for Volta/Turing GPUs or FA not supported
         return _Backend.XFORMERS
 
     @classmethod
-    def get_attn_backend_cls(cls, selected_backend, head_size, dtype,
-                             kv_cache_dtype, block_size, use_v1, use_mla,
-                             has_sink) -> str:
+    def get_attn_backend_cls(
+        cls,
+        selected_backend,
+        head_size,
+        dtype,
+        kv_cache_dtype,
+        block_size,
+        use_v1,
+        use_mla,
+        has_sink,
+    ) -> str:
         if use_mla:
             # TODO(lucas): refactor to be more concise
             #  we should probably consider factoring out V1 here
@@ -226,17 +240,24 @@ class CudaPlatformBase(Platform):
             from vllm.attention.utils.fa_utils import flash_attn_supports_mla
 
             use_cutlassmla = selected_backend == _Backend.CUTLASS_MLA or (
-                selected_backend is None and cls.is_device_capability(100)
-                and block_size == 128)
-            use_flashinfermla = (selected_backend == _Backend.FLASHINFER_MLA
-                                 and cls.has_device_capability(100))
+                selected_backend is None
+                and cls.is_device_capability(100)
+                and block_size == 128
+            )
+            use_flashinfermla = (
+                selected_backend == _Backend.FLASHINFER_MLA
+                and cls.has_device_capability(100)
+            )
             use_flashmla = selected_backend in [
-                _Backend.FLASHMLA, _Backend.FLASHMLA_VLLM_V1
+                _Backend.FLASHMLA,
+                _Backend.FLASHMLA_VLLM_V1,
             ] or (selected_backend is None and is_flashmla_supported()[0])
             use_flashattn = selected_backend == _Backend.FLASH_ATTN_MLA or (
-                selected_backend is None and flash_attn_supports_mla())
+                selected_backend is None and flash_attn_supports_mla()
+            )
             use_triton = selected_backend == _Backend.TRITON_MLA or (
-                selected_backend is None)
+                selected_backend is None
+            )
 
             def _get_version(name, import_suffix) -> str:
                 if use_v1:
@@ -249,20 +270,22 @@ class CudaPlatformBase(Platform):
             if use_cutlassmla:
                 if use_v1:
                     logger.info_once("Using Cutlass MLA backend on V1 engine.")
-                    return ("vllm.v1.attention.backends.mla."
-                            "cutlass_mla.CutlassMLABackend")
+                    return (
+                        "vllm.v1.attention.backends.mla."
+                        "cutlass_mla.CutlassMLABackend"
+                    )
                 else:
-                    logger.warning(
-                        "Cutlass MLA backend is only supported on V1 engine")
+                    logger.warning("Cutlass MLA backend is only supported on V1 engine")
             if use_flashinfermla:
                 if use_v1:
-                    from vllm.v1.attention.backends.utils import (
-                        set_kv_cache_layout)
+                    from vllm.v1.attention.backends.utils import set_kv_cache_layout
+
                     set_kv_cache_layout("HND")
-                    logger.info_once(
-                        "Using FlashInfer MLA backend on V1 engine.")
-                    return ("vllm.v1.attention.backends.mla."
-                            "flashinfer_mla.FlashInferMLABackend")
+                    logger.info_once("Using FlashInfer MLA backend on V1 engine.")
+                    return (
+                        "vllm.v1.attention.backends.mla."
+                        "flashinfer_mla.FlashInferMLABackend"
+                    )
                 else:
                     logger.warning(
                         "FlashInfer MLA backend is only supported on V1 engine"
@@ -272,22 +295,23 @@ class CudaPlatformBase(Platform):
                     logger.warning(
                         "FlashMLA backend is not supported for block size %d"
                         " (currently only supports block size 64).",
-                        block_size)
+                        block_size,
+                    )
                 else:
                     return _get_version("FlashMLA", "flashmla.FlashMLABackend")
             if use_flashattn:
                 if use_v1:
-                    logger.info_once(
-                        "Using FlashAttention MLA backend on V1 engine.")
-                    return ("vllm.v1.attention.backends.mla."
-                            "flashattn_mla.FlashAttnMLABackend")
+                    logger.info_once("Using FlashAttention MLA backend on V1 engine.")
+                    return (
+                        "vllm.v1.attention.backends.mla."
+                        "flashattn_mla.FlashAttnMLABackend"
+                    )
                 else:
                     logger.warning(
-                        "FlashAttention MLA backend is only supported on V1 "
-                        "engine.")
+                        "FlashAttention MLA backend is only supported on V1 " "engine."
+                    )
             if use_triton:
-                return _get_version("Triton MLA",
-                                    "triton_mla.TritonMLABackend")
+                return _get_version("Triton MLA", "triton_mla.TritonMLABackend")
         if use_v1:
             FLASHINFER_V1 = "vllm.v1.attention.backends.flashinfer.FlashInferBackend"  # noqa: E501
             FLEX_ATTENTION_V1 = "vllm.v1.attention.backends.flex_attention.FlexAttentionBackend"  # noqa: E501
@@ -299,8 +323,8 @@ class CudaPlatformBase(Platform):
             if selected_backend == _Backend.FLASHINFER:
                 logger.info_once("Using FlashInfer backend on V1 engine.")
                 if cls.has_device_capability(100):
-                    from vllm.v1.attention.backends.utils import (
-                        set_kv_cache_layout)
+                    from vllm.v1.attention.backends.utils import set_kv_cache_layout
+
                     set_kv_cache_layout("HND")
                 return FLASHINFER_V1
             elif selected_backend == _Backend.FLEX_ATTENTION:
@@ -325,13 +349,14 @@ class CudaPlatformBase(Platform):
             # Prefer FlashInfer for Blackwell GPUs if installed
             if cls.is_device_capability(100):
                 if is_default_backend_supported := is_attn_backend_supported(
-                        FLASHINFER_V1, head_size, dtype):
-                    from vllm.v1.attention.backends.utils import (
-                        set_kv_cache_layout)
+                    FLASHINFER_V1, head_size, dtype
+                ):
+                    from vllm.v1.attention.backends.utils import set_kv_cache_layout
 
                     logger.info_once(
                         "Using FlashInfer backend with HND KV cache layout on "
-                        "V1 engine by default for Blackwell (SM 10.0) GPUs.")
+                        "V1 engine by default for Blackwell (SM 10.0) GPUs."
+                    )
                     set_kv_cache_layout("HND")
 
                     return FLASHINFER_V1
@@ -340,7 +365,8 @@ class CudaPlatformBase(Platform):
                     logger.warning_once(
                         "FlashInfer failed to import for V1 engine on "
                         "Blackwell (SM 10.0) GPUs; it is recommended to "
-                        "install FlashInfer for better performance.")
+                        "install FlashInfer for better performance."
+                    )
 
             # FlashAttention is the default for SM 8.0+ GPUs
             if cls.has_device_capability(80):
@@ -348,10 +374,9 @@ class CudaPlatformBase(Platform):
                     logger.info_once("Using Triton backend on V1 engine.")
                     return TRITON_ATTN_VLLM_V1
                 if is_default_backend_supported := is_attn_backend_supported(
-                        FLASH_ATTN_V1, head_size, dtype,
-                        allow_import_error=False):
-                    logger.info_once("Using Flash Attention backend on "
-                                     "V1 engine.")
+                    FLASH_ATTN_V1, head_size, dtype, allow_import_error=False
+                ):
+                    logger.info_once("Using Flash Attention backend on " "V1 engine.")
                     return FLASH_ATTN_V1
 
             # FlexAttention is the default for older GPUs
@@ -369,8 +394,7 @@ class CudaPlatformBase(Platform):
 
             logger.info_once(
                 "Using FlexAttention backend for %s on V1 engine.",
-                ", ".join(f"{k}={v}"
-                          for k, v in use_flex_attention_reason.items()),
+                ", ".join(f"{k}={v}" for k, v in use_flex_attention_reason.items()),
             )
             return FLEX_ATTENTION_V1
 
@@ -380,35 +404,42 @@ class CudaPlatformBase(Platform):
             return "vllm.attention.backends.xformers.XFormersBackend"
         elif selected_backend == _Backend.DUAL_CHUNK_FLASH_ATTN:
             logger.info("Using DualChunkFlashAttention backend.")
-            return ("vllm.attention.backends.dual_chunk_flash_attn."
-                    "DualChunkFlashAttentionBackend")
+            return (
+                "vllm.attention.backends.dual_chunk_flash_attn."
+                "DualChunkFlashAttentionBackend"
+            )
         elif selected_backend == _Backend.DIFFERENTIAL_FLASH_ATTN:
             logger.info("Using DifferentialFlashAttention backend.")
-            return ("vllm.attention.backends.differential_flash_attn."
-                    "DifferentialFlashAttentionBackend")
+            return (
+                "vllm.attention.backends.differential_flash_attn."
+                "DifferentialFlashAttentionBackend"
+            )
         elif selected_backend == _Backend.FLASH_ATTN:
             pass
         elif selected_backend:
             raise ValueError(
                 f"Invalid attention backend for {cls.device_name}, "
-                f"with use_v1: {use_v1} use_mla: {use_mla}")
+                f"with use_v1: {use_v1} use_mla: {use_mla}"
+            )
 
         target_backend = _Backend.FLASH_ATTN
         if not cls.has_device_capability(80):
             # Volta and Turing NVIDIA GPUs.
             logger.info(
-                "Cannot use FlashAttention-2 backend for Volta and Turing "
-                "GPUs.")
+                "Cannot use FlashAttention-2 backend for Volta and Turing " "GPUs."
+            )
             target_backend = _Backend.XFORMERS
         elif dtype not in (torch.float16, torch.bfloat16):
             logger.info(
                 "Cannot use FlashAttention-2 backend for dtype other than "
-                "torch.float16 or torch.bfloat16.")
+                "torch.float16 or torch.bfloat16."
+            )
             target_backend = _Backend.XFORMERS
         elif block_size % 16 != 0:
             logger.info(
                 "Cannot use FlashAttention-2 backend for block size not "
-                "divisible by 16.")
+                "divisible by 16."
+            )
             target_backend = _Backend.XFORMERS
 
         # FlashAttn is valid for the model, checking if the package is
@@ -417,27 +448,30 @@ class CudaPlatformBase(Platform):
             try:
                 import vllm.vllm_flash_attn  # noqa: F401
                 from vllm.attention.backends.flash_attn import (  # noqa: F401
-                    FlashAttentionBackend, flash_attn_supports_fp8)
+                    flash_attn_supports_fp8,
+                    FlashAttentionBackend,
+                )
 
-                supported_sizes = \
-                    FlashAttentionBackend.get_supported_head_sizes()
+                supported_sizes = FlashAttentionBackend.get_supported_head_sizes()
                 if head_size not in supported_sizes:
                     logger.info(
                         "Cannot use FlashAttention-2 backend for head size %d.",
-                        head_size)
+                        head_size,
+                    )
                     target_backend = _Backend.XFORMERS
-                fp8_kv_cache = (kv_cache_dtype is not None
-                                and kv_cache_dtype.startswith("fp8"))
-                if (fp8_kv_cache and not flash_attn_supports_fp8()):
-                    logger.info(
-                        "Cannot use FlashAttention backend for FP8 KV cache.")
+                fp8_kv_cache = kv_cache_dtype is not None and kv_cache_dtype.startswith(
+                    "fp8"
+                )
+                if fp8_kv_cache and not flash_attn_supports_fp8():
+                    logger.info("Cannot use FlashAttention backend for FP8 KV cache.")
                     target_backend = _Backend.XFORMERS
             except ImportError:
                 logger.info(
                     "Cannot use FlashAttention-2 backend because the "
                     "vllm.vllm_flash_attn package is not found. "
                     "Make sure that vllm_flash_attn was built and installed "
-                    "(on by default).")
+                    "(on by default)."
+                )
                 target_backend = _Backend.XFORMERS
 
         if target_backend == _Backend.XFORMERS:
@@ -495,8 +529,9 @@ class CudaPlatformBase(Platform):
         backend_options = ProcessGroupNCCL.Options()
         backend_options._timeout = timeout
 
-        backend_class = ProcessGroupNCCL(prefix_store, group_rank, group_size,
-                                         backend_options)
+        backend_class = ProcessGroupNCCL(
+            prefix_store, group_rank, group_size, backend_options
+        )
         backend_type = ProcessGroup.BackendType.NCCL
         device = torch.device("cuda")
         pg._set_default_backend(backend_type)
@@ -510,8 +545,9 @@ class CudaPlatformBase(Platform):
         return cuda_device_count_stateless()
 
     @classmethod
-    def is_kv_cache_dtype_supported(cls, kv_cache_dtype: str,
-                                    model_config: "ModelConfig") -> bool:
+    def is_kv_cache_dtype_supported(
+        cls, kv_cache_dtype: str, model_config: "ModelConfig"
+    ) -> bool:
         fp8_attention = kv_cache_dtype.startswith("fp8")
         attention_backend = envs.VLLM_ATTENTION_BACKEND
 
@@ -529,7 +565,7 @@ class CudaPlatformBase(Platform):
             if attention_backend in ["FLASHMLA", "CUTLASS_MLA"]:
                 supported = True
             else:
-                supported = (not fp8_attention)
+                supported = not fp8_attention
         else:
             # Default to FlashAttention
             if attention_backend is None:
@@ -540,8 +576,8 @@ class CudaPlatformBase(Platform):
                 supported = True
             elif attention_backend == "FLASH_ATTN_VLLM_V1":
                 if fp8_attention:
-                    from vllm.attention.utils.fa_utils import (
-                        flash_attn_supports_fp8)
+                    from vllm.attention.utils.fa_utils import flash_attn_supports_fp8
+
                     supported = flash_attn_supports_fp8()
                 else:
                     supported = True
@@ -569,7 +605,32 @@ class CudaPlatformBase(Platform):
                     "with compute capability of at least 8.0. "
                     f"Your {gpu_name} GPU {compute_str}. "
                     "You can use float16 instead by explicitly setting the "
-                    "`dtype` flag in CLI, for example: --dtype=half.")
+                    "`dtype` flag in CLI, for example: --dtype=half."
+                )
+
+    @classmethod
+    def insert_blocks_to_device(
+        cls,
+        src_cache: torch.Tensor,
+        dst_cache: torch.Tensor,
+        src_block_indices: torch.Tensor,
+        dst_block_indices: torch.Tensor,
+    ) -> None:
+        """Copy blocks from src_cache to dst_cache on GPU."""
+        _src_cache = src_cache[:, src_block_indices]
+        dst_cache[:, dst_block_indices] = _src_cache.to(dst_cache.device)
+
+    @classmethod
+    def swap_out_blocks_to_host(
+        cls,
+        src_cache: torch.Tensor,
+        dst_cache: torch.Tensor,
+        src_block_indices: torch.Tensor,
+        dst_block_indices: torch.Tensor,
+    ) -> None:
+        """Copy blocks from GPU to host (CPU)."""
+        _src_cache = src_cache[:, src_block_indices]
+        dst_cache[:, dst_block_indices] = _src_cache.cpu()
 
     @classmethod
     def support_hybrid_kv_cache(cls) -> bool:
@@ -585,9 +646,7 @@ class NvmlCudaPlatform(CudaPlatformBase):
     @classmethod
     @cache
     @with_nvml_context
-    def get_device_capability(cls,
-                              device_id: int = 0
-                              ) -> Optional[DeviceCapability]:
+    def get_device_capability(cls, device_id: int = 0) -> Optional[DeviceCapability]:
         try:
             physical_device_id = cls.device_id_to_physical_device_id(device_id)
             handle = pynvml.nvmlDeviceGetHandleByIndex(physical_device_id)
@@ -634,9 +693,7 @@ class NvmlCudaPlatform(CudaPlatformBase):
         """
         query if the set of gpus are fully connected by nvlink (1 hop)
         """
-        handles = [
-            pynvml.nvmlDeviceGetHandleByIndex(i) for i in physical_device_ids
-        ]
+        handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in physical_device_ids]
         for i, handle in enumerate(handles):
             for j, peer_handle in enumerate(handles):
                 if i < j:
@@ -651,7 +708,8 @@ class NvmlCudaPlatform(CudaPlatformBase):
                     except pynvml.NVMLError:
                         logger.exception(
                             "NVLink detection failed. This is normal if"
-                            " your machine has no NVLink equipped.")
+                            " your machine has no NVLink equipped."
+                        )
                         return False
         return True
 
@@ -665,11 +723,11 @@ class NvmlCudaPlatform(CudaPlatformBase):
     def log_warnings(cls):
         device_ids: int = pynvml.nvmlDeviceGetCount()
         if device_ids > 1:
-            device_names = [
-                cls._get_physical_device_name(i) for i in range(device_ids)
-            ]
-            if (len(set(device_names)) > 1
-                    and os.environ.get("CUDA_DEVICE_ORDER") != "PCI_BUS_ID"):
+            device_names = [cls._get_physical_device_name(i) for i in range(device_ids)]
+            if (
+                len(set(device_names)) > 1
+                and os.environ.get("CUDA_DEVICE_ORDER") != "PCI_BUS_ID"
+            ):
                 logger.warning(
                     "Detected different devices in the system: %s. Please"
                     " make sure to set `CUDA_DEVICE_ORDER=PCI_BUS_ID` to "
@@ -699,7 +757,8 @@ class NonNvmlCudaPlatform(CudaPlatformBase):
     def is_fully_connected(cls, physical_device_ids: list[int]) -> bool:
         logger.exception(
             "NVLink detection not possible, as context support was"
-            " not found. Assuming no NVLink available.")
+            " not found. Assuming no NVLink available."
+        )
         return False
 
 
